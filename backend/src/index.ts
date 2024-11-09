@@ -1,91 +1,102 @@
-import WebSocket, { errorMonitor } from "ws";
+import WebSocket from "ws";
 import { WebSocketServer } from "ws";
 
 const port = 8080;
 
-const wss = new WebSocketServer({ port: port }, () =>
-  console.log("web socket server estabilised on " + port)
+const wss = new WebSocketServer({ port }, () =>
+  console.log("WebSocket server established on " + port)
 );
 
-var reciever: WebSocket | null = null;
-var sender: WebSocket | null = null;
+let receiver: WebSocket | null = null;
+let sender: WebSocket | null = null;
 
-enum operation {
-  "identify-as-reciever" = "identify-as-reciever",
-  "identify-as-sender" = "identify-as-sender",
-  "ice-candidates" = "ice-candidates",
-  "create-offer" = "create-offer",
-  "accept-offer" = "accept-offer",
+enum MessageType {
+  IDENTIFY_AS_RECEIVER = "identify-as-receiver",
+  IDENTIFY_AS_SENDER = "identify-as-sender",
+  ICE_CANDIDATES = "ice-candidates",
+  CREATE_OFFER = "create-offer",
+  ACCEPT_OFFER = "accept-offer",
 }
 
-interface ClientInfo {
-  type: operation;
-  msg?: any;
+interface Message {
+  type: string;
+  msg: any;
 }
 
 wss.on("connection", (ws) => {
-  ws.on("error", (error) => {
-    console.log("error connecting to client\n" + error);
-  });
+  ws.on("error", console.error);
+
   ws.on("message", (data) => {
     try {
-      const parsedData: ClientInfo = JSON.parse(data.toString());
-      //console.log("type = " + parsedData.type);
-      console.log("\n");
-      if (parsedData.type == operation["identify-as-sender"]) {
-        sender = ws;
-        console.log("sender set");
-      } else if (parsedData.type == operation["identify-as-reciever"]) {
-        reciever = ws;
-        console.log("reciever set");
-      } else if (
-        parsedData.type == operation["create-offer"] &&
-        ws === sender
-      ) {
-        console.log("found senders offer");
+      const message: Message = JSON.parse(data.toString());
+      console.log("Received:", message);
 
-        if (parsedData.msg?.sdp)
-          reciever?.send(
-            JSON.stringify({
-              type: parsedData.type,
-              msg: { sdp: parsedData.msg?.sdp },
-            })
-          );
-        else console.log("no sdp found");
-      } else if (
-        parsedData.type == operation["accept-offer"] &&
-        ws === reciever
-      ) {
-        if (parsedData.msg?.sdp) {
-          sender?.send(
-            JSON.stringify({
-              type: parsedData.type,
-              msg: { sdp: parsedData.msg?.sdp },
-            })
-          );
-          console.log("answer sent to sender!");
-        } else console.log("no sdp found");
-      } else if (parsedData.type == operation["ice-candidates"]) {
-        if (ws == sender) {
-          reciever?.send(
-            JSON.stringify({
-              type: parsedData.type,
-              msg: parsedData.msg?.ice,
-            })
-          );
-        } else if (ws == reciever) {
-          sender?.send(
-            JSON.stringify({
-              type: parsedData.type,
-              msg: parsedData.msg?.ice,
-            })
-          );
-        }
+      switch (message.type) {
+        case MessageType.IDENTIFY_AS_SENDER:
+          sender = ws;
+          console.log("Sender identified");
+          break;
+
+        case MessageType.IDENTIFY_AS_RECEIVER:
+          receiver = ws;
+          console.log("Receiver identified");
+          break;
+
+        case MessageType.CREATE_OFFER:
+          if (ws === sender && receiver && message.msg?.sdp) {
+            receiver.send(
+              JSON.stringify({
+                type: "create-offer",
+                msg: { sdp: message.msg.sdp },
+              })
+            );
+            console.log("Offer forwarded to receiver");
+          }
+          break;
+
+        case MessageType.ACCEPT_OFFER:
+          if (ws === receiver && sender && message.msg?.sdp) {
+            sender.send(
+              JSON.stringify({
+                type: "accept-offer",
+                msg: { sdp: message.msg.sdp },
+              })
+            );
+            console.log("Answer forwarded to sender");
+          }
+          break;
+
+        case MessageType.ICE_CANDIDATES:
+          if (ws === sender && receiver) {
+            receiver.send(
+              JSON.stringify({
+                type: "ice-candidates",
+                msg: { ice: message.msg.ice },
+              })
+            );
+          } else if (ws === receiver && sender) {
+            sender.send(
+              JSON.stringify({
+                type: "ice-candidates",
+                msg: { ice: message.msg.ice },
+              })
+            );
+          }
+          console.log("ICE candidate forwarded");
+          break;
       }
-
-      console.log("recieved : " + JSON.stringify(parsedData));
     } catch (error) {
-      console.log("invalid data recieved \n\n" + error);
+      console.error("Invalid message received:", error);
+    }
+  });
+
+  ws.on("close", () => {
+    if (ws === sender) {
+      sender = null;
+      console.log("Sender disconnected");
+    } else if (ws === receiver) {
+      receiver = null;
+      console.log("Receiver disconnected");
     }
   });
 });
